@@ -189,12 +189,12 @@ n (Null-Terminated String)   databasename (optional)
 */
 func (mc *mysqlConn) writeAuthPacket() (e error) {
 	// Adjust client flags based on server support
-	clientFlags := uint32(CLIENT_MULTI_STATEMENTS |
-		// CLIENT_MULTI_RESULTS |
-		CLIENT_PROTOCOL_41 |
-		CLIENT_SECURE_CONN |
-		CLIENT_LONG_PASSWORD |
-		CLIENT_TRANSACTIONS)
+	clientFlags := uint32(  CLIENT_MULTI_STATEMENTS |
+							//CLIENT_MULTI_RESULTS  |
+							CLIENT_PROTOCOL_41 		|
+							CLIENT_SECURE_CONN 		|
+							CLIENT_LONG_PASSWORD 	|
+							CLIENT_TRANSACTIONS)
 	if mc.server.flags&CLIENT_LONG_FLAG > 0 {
 		clientFlags |= uint32(CLIENT_LONG_FLAG)
 	}
@@ -202,6 +202,7 @@ func (mc *mysqlConn) writeAuthPacket() (e error) {
 	if len(mc.cfg.dbname) > 0 {
 		clientFlags |= uint32(CLIENT_CONNECT_WITH_DB)
 	}
+	
 
 	// User Password
 	scrambleBuff := scramblePassword(mc.server.scrambleBuff, []byte(mc.cfg.passwd))
@@ -303,18 +304,16 @@ func (mc *mysqlConn) writeCommandPacket(command commandType, args ...interface{}
 		return fmt.Errorf("Unknown command: %d", command)
 	}
 
+
 	pktLen := 1 + len(arg)
 	data := make([]byte, 0, pktLen+4)
-
 	// Add the packet header
-	data = append(data, uint24ToBytes(uint32(pktLen))...)
-	data = append(data, mc.sequence)
-
+	data = append(data, uint24ToBytes(uint32(pktLen))...)  	//length
+	data = append(data, mc.sequence) 						//sequence number
 	// Add command byte
-	data = append(data, byte(command))
-
+	data = append(data, byte(command))                      //command
 	// Add arg
-	data = append(data, arg...)
+	data = append(data, arg...)                             //args
 
 	// Send CMD packet
 	return mc.writePacket(&data)

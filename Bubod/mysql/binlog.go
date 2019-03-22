@@ -22,16 +22,16 @@ type eventParser struct {
 	tableNameMap     	map[string]uint64					// table字段集合
 	tableSchemaMap   	map[uint64][]*column_schema_type	// table字段描述详情
 	dataSource       	*string
-	connStatus       	int8 //连接状态 0 stop  1 running
+	connStatus       	int8 				// 连接状态 0 stop  1 running
 	conn             	MysqlConnection
-	dumpBinLogStatus 	uint8 // 同步状态 0 stop , 1 running, 2 mysqlConn.Close, 3 KillConnect mysqlConn.Close
+	dumpBinLogStatus 	uint8 				// 同步状态 0 stop, 1 running, 2 mysqlConn.Close, 3 KillConnect mysqlConn.Close
 	binlogFileName   	string
 	binlogPosition   	uint32
 	maxBinlogFileName   string
 	maxBinlogPosition   uint32
 	binlogIgnoreDb   	*string
 	replicateDoDb    	map[string]uint8
-	eventDo          	[]bool		// 订阅的事件
+	eventDo          	[]bool				// 订阅的事件
 	ServerId        	uint32
 	connectionId	 	string
 	connLock 		 	sync.Mutex
@@ -55,6 +55,8 @@ func newEventParser() (parser *eventParser) {
 // binlog事件内容解析
 func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename string, err error) {
 	var buf *bytes.Buffer
+
+	//根据是否含有4字节校验和确定数据区域范围
 	if parser.binlog_checksum {
 		buf = bytes.NewBuffer(data[0:len(data)-4])
 	}else{
@@ -62,8 +64,20 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 	}
 
 	filename = parser.binlogFileName
+
+	// 通用事件头(common-header)结构体(19个字节):
+	//
+	// 属性			字节数	含义
+	// timestamp	4		包含了该事件的开始执行时间
+	// eventType	1		事件类型
+	// serverId		4		标识产生该事件的MySQL服务器的server-id
+	// eventLength	4		该事件的长度(Header+Data+CheckSum)
+	// nextPosition	4		下一个事件在binlog文件中的位置
+	// flags		2		标识产生该事件的MySQL服务器的server-id。
+
+	//第4字节为 eventType，标识事件类型，不同事件类型对应不同的协议解析方式。
 	switch EventType(data[4]) {
-	case HEARTBEAT_EVENT,IGNORABLE_EVENT,GTID_EVENT,ANONYMOUS_GTID_EVENT,PREVIOUS_GTIDS_EVENT:
+	case HEARTBEAT_EVENT, IGNORABLE_EVENT, GTID_EVENT, ANONYMOUS_GTID_EVENT, PREVIOUS_GTIDS_EVENT:
 		// 其余主 主动更新事件
 		return
 	case FORMAT_DESCRIPTION_EVENT:
@@ -105,30 +119,41 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 			Query:          queryEvent.query,
 		}
 		return
+
 	case ROTATE_EVENT: 
 		// 切换新binlogFileName
 		var rotateEvent *RotateEvent
 		rotateEvent, err = parser.parseRotateEvent(buf)
+
+
+		// 更新 binlogFileName 和 binlogPosition
 		parser.binlogFileName = rotateEvent.filename
 		parser.binlogPosition = uint32(rotateEvent.position)
 		filename = parser.binlogFileName
+		// 清空表字段 map，避免字段串表（不同binlog文件可能 Tableid 对应关系不同）
+		parser.tableSchemaMap = make(map[uint64][]*column_schema_type, 0)
+
 		event = &EventReslut{
 			Header:         rotateEvent.header,
 			BinlogFileName: parser.binlogFileName,
 			BinlogPosition: parser.binlogPosition,
 		}
-		// 清空 表字段map，避免字段串表（不同binlog文件可能Tableid 对应关系不同）
-		parser.tableSchemaMap = make(map[uint64][]*column_schema_type,0)
 		return
+
 	case TABLE_MAP_EVENT:
-		// 表变更事件，填充表、表字段 的详细信息，每个rows 事件均会带上此事件
+		// 表变更事件，填充表、表字段 的详细信息，每个 rows 事件均会带上此事件
 		// https://dev.mysql.com/doc/internals/en/table-map-event.html
 		var table_map_event *TableMapEvent
 		table_map_event, err = parser.parseTableMapEvent(buf)
+
+
+		// 缓存 TableId 和 TableMapEvent 的映射关系
 		parser.tableMap[table_map_event.tableId] = table_map_event
+		// 
 		if _, ok := parser.tableSchemaMap[table_map_event.tableId]; !ok {
 			parser.GetTableSchema(table_map_event.tableId, table_map_event.schemaName, table_map_event.tableName)
 		}
+
 		event = &EventReslut{
 			Header:         table_map_event.header,
 			BinlogFileName: parser.binlogFileName,
@@ -137,14 +162,24 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 			TableName:      parser.tableMap[table_map_event.tableId].tableName,
 		}
 		return
-	case WRITE_ROWS_EVENTv0,WRITE_ROWS_EVENTv1,WRITE_ROWS_EVENTv2, UPDATE_ROWS_EVENTv0,UPDATE_ROWS_EVENTv1,UPDATE_ROWS_EVENTv2, DELETE_ROWS_EVENTv0,DELETE_ROWS_EVENTv1,DELETE_ROWS_EVENTv2:
+
+	case WRITE_ROWS_EVENTv0, 
+		 WRITE_ROWS_EVENTv1, 
+		 WRITE_ROWS_EVENTv2, 
+		 UPDATE_ROWS_EVENTv0, 
+		 UPDATE_ROWS_EVENTv1, 
+		 UPDATE_ROWS_EVENTv2, 
+		 DELETE_ROWS_EVENTv0, 
+		 DELETE_ROWS_EVENTv1, 
+		 DELETE_ROWS_EVENTv2:
 		
-		// insert update delete 数据变更事件处理
+		// insert/update/delete 数据变更事件处理
 		var rowsEvent *RowsEvent
 		rowsEvent, err = parser.parseRowsEvent(buf)
 		if err != nil{
 			log.Println("row event err:",err)
 		}
+
 		// log.Println("############:",parser.tableMap[rowsEvent.tableId].tableName)
 		// log.Println("############:",rowsEvent.tableId)
 		// log.Println("############:",buf)
@@ -158,6 +193,7 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 			Rows:           rowsEvent.rows,
 			Primary:        rowsEvent.primary,
 		}
+
 	default:
 		var genericEvent *GenericEvent
 		genericEvent, err = parseGenericEvent(buf)
@@ -182,7 +218,7 @@ func (parser *eventParser) initConn() {
 func (parser *eventParser) GetTableSchema(tableId uint64, database string, tablename string) {
 	for {
 		parser.connLock.Lock()
-		err := parser.GetTableSchemaByName(tableId,database,tablename)
+		err := parser.GetTableSchemaByName(tableId, database, tablename)
 		parser.connLock.Unlock()
 		if err == nil{
 			break
@@ -205,7 +241,15 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 	if parser.connStatus == 0 {
 		parser.initConn()
 	}
-	//set dbAndTable Name tableId
+
+	// 注意，tableNameMap 保存了 database.tablename 和 tableId 的映射关系， 而 tableSchemaMap 保存了
+	// tableId 和 database.tablename 对应的 column_schema_type 的映射关系：
+	// 		parser.tableNameMap[database+"."+tablename] = tableId
+	// 		parser.tableSchemaMap[tableId] = append(parser.tableSchemaMap[tableId], &column_schema_type{...})
+
+
+
+	// 这里通过执行sql语句获取 database.tablename 的表元信息，然后转化成 column_schema_type 结构存储起来。
 	parser.tableNameMap[database+"."+tablename] = tableId
 	sql := "SELECT COLUMN_NAME,COLUMN_KEY,COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME,NUMERIC_SCALE,EXTRA FROM information_schema.columns WHERE table_schema='" + database + "' AND table_name='" + tablename + "' ORDER BY `ORDINAL_POSITION` ASC"
 	stmt, err := parser.conn.Prepare(sql)
@@ -221,21 +265,21 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 		if err != nil {
 			break
 		}
-		var COLUMN_NAME, COLUMN_KEY, COLUMN_TYPE string
-		var CHARACTER_SET_NAME,COLLATION_NAME,NUMERIC_SCALE,EXTRA string
+
+		COLUMN_NAME 		:= string(dest[0].([]byte))
+		COLUMN_KEY 			:= string(dest[1].([]byte))
+		COLUMN_TYPE 		:= string(dest[2].([]byte))
+		CHARACTER_SET_NAME 	:= string(dest[3].([]byte))
+		COLLATION_NAME 		:= string(dest[4].([]byte))
+		NUMERIC_SCALE 		:= string(dest[5].([]byte))
+		EXTRA 				:= string(dest[6].([]byte))
+		
 		var isBool bool = false
 		var unsigned bool = false
 		var is_primary bool = false
 		var auto_increment bool = false
 		var enum_values, set_values []string
 
-		COLUMN_NAME = string(dest[0].([]byte))
-		COLUMN_KEY = string(dest[1].([]byte))
-		COLUMN_TYPE = string(dest[2].([]byte))
-		CHARACTER_SET_NAME = string(dest[3].([]byte))
-		COLLATION_NAME = string(dest[4].([]byte))
-		NUMERIC_SCALE = string(dest[5].([]byte))
-		EXTRA = string(dest[6].([]byte))
 		if COLUMN_TYPE == "tinyint(1)"{
 			isBool = true
 		}
@@ -249,36 +293,41 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 			is_primary = true
 		}
 
+		//枚举类型
 		if COLUMN_TYPE[0:4] == "enum" {
 			d := strings.Replace(COLUMN_TYPE, "enum(", "", -1)
-			d = strings.Replace(d, ")", "", -1)
-			d = strings.Replace(d, "'", "", -1)
+			d  = strings.Replace(d, ")", "", -1)
+			d  = strings.Replace(d, "'", "", -1)
 			enum_values = strings.Split(d, ",")
 		} else {
 			enum_values = make([]string, 0)
 		}
 
+		//集合类型：属性名 SET('值1','值2','值3'...,'值n')
 		if COLUMN_TYPE[0:3] == "set" {
 			d := strings.Replace(COLUMN_TYPE, "set(", "", -1)
-			d = strings.Replace(d, ")", "", -1)
-			d = strings.Replace(d, "'", "", -1)
+			d  = strings.Replace(d, ")", "", -1)
+			d  = strings.Replace(d, "'", "", -1)
 			set_values = strings.Split(d, ",")
 		} else {
 			set_values = make([]string, 0)
 		}
-		parser.tableSchemaMap[tableId] = append(parser.tableSchemaMap[tableId], &column_schema_type{
-			COLUMN_NAME: COLUMN_NAME,
-			COLUMN_KEY:  COLUMN_KEY,
-			COLUMN_TYPE: COLUMN_TYPE,
-			enum_values: enum_values,
-			set_values:  set_values,
-			is_bool:	 isBool,
-			unsigned:    unsigned,
-			is_primary:  is_primary,
-			auto_increment: auto_increment,
-			CHARACTER_SET_NAME:CHARACTER_SET_NAME,
-			COLLATION_NAME:COLLATION_NAME,
-			NUMERIC_SCALE:NUMERIC_SCALE,
+
+
+		parser.tableSchemaMap[tableId] = append(parser.tableSchemaMap[tableId], 
+			&column_schema_type{
+				COLUMN_NAME: COLUMN_NAME,
+				COLUMN_KEY:  COLUMN_KEY,
+				COLUMN_TYPE: COLUMN_TYPE,
+				enum_values: enum_values,
+				set_values:  set_values,
+				is_bool:	 isBool,
+				unsigned:    unsigned,
+				is_primary:  is_primary,
+				auto_increment: auto_increment,
+				CHARACTER_SET_NAME:CHARACTER_SET_NAME,
+				COLLATION_NAME:COLLATION_NAME,
+				NUMERIC_SCALE:NUMERIC_SCALE,
 		})
 	}
 	rows.Close()
@@ -301,9 +350,12 @@ func (parser *eventParser) GetConnectionInfo(connectionId string) (m map[string]
 			parser.connLock.Unlock()
 		}
 	}()
+
 	if parser.connStatus == 0 {
 		parser.initConn()
 	}
+
+	
 	sql := "select TIME,STATE from `information_schema`.`PROCESSLIST` WHERE ID='"+connectionId+"'"
 	stmt, err := parser.conn.Prepare(sql)
 	p := make([]driver.Value, 0)
@@ -418,6 +470,7 @@ func (mc *mysqlConn) DumpBinlog(filename string, position uint32, parser *eventP
 			}
 		}
 		
+		// 每次收取一个完整的 packet
 		pkt, e := mc.readPacket()
 		if e != nil {
 			result <- e
@@ -426,6 +479,8 @@ func (mc *mysqlConn) DumpBinlog(filename string, position uint32, parser *eventP
 			result <- fmt.Errorf("EOF packet")
 			break
 		}
+
+		// 
 		if pkt[0] == 0 {
 			event, _, e := parser.parseEvent(pkt[1:])
 			if e != nil {
@@ -449,6 +504,7 @@ func (mc *mysqlConn) DumpBinlog(filename string, position uint32, parser *eventP
 					}
 				}
 			}
+
 			//only return replicateDoDb, any sql may be use db.table query
 			if len(parser.replicateDoDb) > 0 {
 				if _, ok := parser.replicateDoDb[event.SchemaName]; !ok {
@@ -465,6 +521,7 @@ func (mc *mysqlConn) DumpBinlog(filename string, position uint32, parser *eventP
 				parser.dumpBinLogStatus = 2
 				break
 			}
+
 			//set binlog info
 			callbackFun(event)
 			parser.binlogFileName = event.BinlogFileName
@@ -482,6 +539,8 @@ func (mc *mysqlConn) DumpBinlog(filename string, position uint32, parser *eventP
 	return nil, nil
 }
 
+
+
 type BinlogDump struct {
 	DataSource 		string
 	Status     		string //stop,running,close,error,starting
@@ -495,7 +554,7 @@ type BinlogDump struct {
 	connLock 		sync.Mutex
 }
 
-func (This *BinlogDump) StartDumpBinlog(filename string, position uint32, ServerId uint32, result chan error,maxFileName string,maxPosition uint32) {
+func (This *BinlogDump) StartDumpBinlog(filename string, position uint32, ServerId uint32, result chan error, maxFileName string, maxPosition uint32) {
 	
 	This.parser = newEventParser()
 	This.parser.dataSource = &This.DataSource
@@ -517,8 +576,10 @@ func (This *BinlogDump) StartDumpBinlog(filename string, position uint32, Server
 		}
 		This.parser.connLock.Unlock()
 	}()
+
 	This.parser.binlogFileName = filename
 	This.parser.binlogPosition = position
+
 	for {
 		if This.parser.dumpBinLogStatus == 3 {
 			break
@@ -568,7 +629,7 @@ func (This *BinlogDump) checksum_enabled() {
 	return
 }
 
-// 获取mysql master 最后位点信息
+// 获取 mysql master 最后位点信息
 // [file, position]
 func (This *BinlogDump) getMasterFilePosition() []string {
 	sql := "SHOW MASTER STATUS;"
@@ -581,6 +642,7 @@ func (This *BinlogDump) getMasterFilePosition() []string {
 		log.Println("[error] show master status, sql query error:",err)
 		return nil
 	}
+
 	dest := make([]driver.Value, 4, 4)
 	err = rows.Next(dest)
 	if err != nil {
@@ -589,8 +651,9 @@ func (This *BinlogDump) getMasterFilePosition() []string {
 		}
 		return nil
 	}
+
 	if string(dest[0].([]byte)) != "" && string(dest[1].([]byte)) != "" {
-		filepos := []string { string(dest[0].([]byte)), string(dest[1].([]byte)) } 
+		filepos := []string {string(dest[0].([]byte)), string(dest[1].([]byte)) } 
 		return filepos
 	}
 	return nil
@@ -598,17 +661,20 @@ func (This *BinlogDump) getMasterFilePosition() []string {
 
 func (This *BinlogDump) startConnAndDumpBinlog(result chan error) {
 	
+	// 1. 初始化 mysql 连接
 	dbopen := &mysqlDriver{}
 	conn, err := dbopen.Open(This.DataSource)
 	if err != nil {
 		result <- err
 		time.Sleep(5 * time.Second)
-
 		log.Println("mysqlConn err:", err)
 		return
 	}
 	This.mysqlConn = conn.(MysqlConnection)
 
+
+
+	// 2. 获取 mysql 连接ID
 	//*** get connection id start
 	sql := "SELECT connection_id()"
 	stmt, err := This.mysqlConn.Prepare(sql)
@@ -641,6 +707,9 @@ func (This *BinlogDump) startConnAndDumpBinlog(result chan error) {
 	//go This.checkDumpConnection(connectionId)
 	//*** get connection id end
 
+
+
+	// 3. 获取 binlog file 和 pos
 	// 如果传入的pos为空，则使用当前最新
 	if This.parser.binlogFileName==""{
 		filepos := This.getMasterFilePosition()
@@ -655,14 +724,20 @@ func (This *BinlogDump) startConnAndDumpBinlog(result chan error) {
 		}
 	}
 
+	// 4. skip
 	This.checksum_enabled()
+
+	// 5. 开始启动 binlog 同步，阻塞式运行，每个 binlog 事件会被 This.parser 解析并自动调用回调函数 This.CallbackFun 来处理。
 	This.mysqlConn.DumpBinlog(This.parser.binlogFileName, This.parser.binlogPosition, This.parser, This.CallbackFun, result)
+
+	// 6. 退出处理：临时数据清理...
 	This.connLock.Lock()
 	if This.mysqlConn != nil {
 		This.mysqlConn.Close()
 		This.mysqlConn = nil
 	}
 	This.connLock.Unlock()
+
 	switch This.parser.dumpBinLogStatus {
 	case 3:
 		break
@@ -674,6 +749,8 @@ func (This *BinlogDump) startConnAndDumpBinlog(result chan error) {
 		result <- fmt.Errorf("starting")
 		This.Status = "stop"
 	}
+
+	// 7. ？？？
 	This.parser.KillConnect(This.parser.connectionId)
 }
 
@@ -683,11 +760,13 @@ func (This *BinlogDump) checkDumpConnection(connectionId string) {
 			log.Println("binlog.go checkDumpConnection err:",err)
 		}
 	}()
+
 	for{
 		time.Sleep(9 * time.Second)
 		if This.parser.dumpBinLogStatus >= 2{
 			break
 		}
+
 		var m map[string]string
 		for i:=0;i<3;i++{
 			m = This.parser.GetConnectionInfo(connectionId)
@@ -697,14 +776,16 @@ func (This *BinlogDump) checkDumpConnection(connectionId string) {
 			}
 			break
 		}
+
 		//log.Println("GetConnectionInfo:",m)
 		This.parser.connLock.Lock()
 		if connectionId != This.parser.connectionId{
 			This.parser.connLock.Unlock()
 			break
 		}
+
 		if m == nil || m["TIME"] == ""{
-			log.Println("This.mysqlConn close ,connectionId: ",connectionId)
+			log.Println("This.mysqlConn close, connectionId: ", connectionId)
 			This.connLock.Lock()
 			if This.mysqlConn != nil{
 				This.mysqlConn.Close()

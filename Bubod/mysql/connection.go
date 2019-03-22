@@ -12,7 +12,7 @@ import (
 type mysqlConn struct {
 	cfg            *config
 	server         *serverSettings
-	netConn        net.Conn
+	netConn        net.Conn 
 	bufReader      *bufio.Reader
 	protocol       uint8
 	sequence       uint8
@@ -103,8 +103,7 @@ func (mc *mysqlConn) handleParams() (e error) {
 					var diff time.Duration
 					for {
 						// Fires only if diff > keepalive. Makes it collision safe
-						for mc.netConn != nil &&
-							mc.lastCmdTime.Unix()+mc.server.keepalive > time.Now().Unix() {
+						for mc.netConn != nil && mc.lastCmdTime.Unix()+mc.server.keepalive > time.Now().Unix() {
 							diff = mc.lastCmdTime.Sub(time.Unix(time.Now().Unix()-mc.server.keepalive, 0))
 							time.Sleep(diff)
 						}

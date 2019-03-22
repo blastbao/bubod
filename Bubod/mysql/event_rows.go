@@ -16,24 +16,70 @@ import (
 	// "encoding/json"
 )
 
+// ROWS_EVENT 简介: 
+//
+// 对于ROW格式的binlog，所有的DML语句都是记录在ROWS_EVENT中。
+// ROWS_EVENT分为三种：WRITE_ROWS_EVENT，UPDATE_ROWS_EVENT，DELETE_ROWS_EVENT，分别对应 insert，update 和 delete 操作。
+//
+// 对于insert操作，WRITE_ROWS_EVENT包含了要插入的数据；
+// 对于update操作，UPDATE_ROWS_EVENT不仅包含了修改后的数据，还包含了修改前的值；
+// 对于delete操作，仅仅需要指定删除的主键（在没有主键的情况下，会给定所有列）。
+// 
+// 注意，对于 QUERY_EVENT 事件，是以文本形式记录DML操作的。而对于ROWS_EVENT事件，并不是文本形式，
+// 所以在通过 mysqlbinlog 查看基于 ROW 格式的 binlog 时，需要指定 -vv --base64-output=decode-rows。
+
 type RowsEvent struct {
 	header                EventHeader
-	tableId               uint64
-	tableMap              *TableMapEvent
+	tableId               uint64            // 表id
+	tableMap              *TableMapEvent    // 
 	flags                 uint16
 	columnsPresentBitmap1 Bitfield
 	columnsPresentBitmap2 Bitfield
-	rows                  []map[string]driver.Value
-	primary			  	  string	// 记录主键字段
-	// ColumnSchemaType	  *column_schema_type // 表字段属性
+	rows                  []map[string]driver.Value // 记录了所有的变更行
+	primary			  	  string					// 记录主键字段
+	// ColumnSchemaType	  *column_schema_type 		// 表字段属性
 }
 
-// 整合返回变更数据
+//reference: https://dev.mysql.com/doc/internals/en/rows-event.html
+//
+// header:
+//
+//   if post_header_len == 6 {
+// 		4                    table id
+//   } else {
+// 		6                    table id
+//   }
+// 		2                    flags
+//  
+//   if version == 2 {
+// 		2                    extra-data-length
+// 		string.var_len       extra-data
+//   }
+//
+// body:
+// 		lenenc_int           number of columns
+// 		string.var_len       columns-present-bitmap1, length: (num of columns+7)/8
+//   if UPDATE_ROWS_EVENTv1 or v2 {
+// 		string.var_len       columns-present-bitmap2, length: (num of columns+7)/8
+//   }
+//
+// rows:
+// 		string.var_len       nul-bitmap, length (bits set in 'columns-present-bitmap1'+7)/8
+// 		string.var_len       value of each field as defined in table-map
+//   if UPDATE_ROWS_EVENTv1 or v2 {
+// 		string.var_len       nul-bitmap, length (bits set in 'columns-present-bitmap2'+7)/8
+// 		string.var_len       value of each field as defined in table-map
+//   }
+//   ... repeat rows until event-end
+
 func (parser *eventParser) parseRowsEvent(buf *bytes.Buffer) (event *RowsEvent, err error) {
 	var columnCount uint64
 
+	//通用事件头 EventHeader
 	event = new(RowsEvent)
 	err = binary.Read(buf, binary.LittleEndian, &event.header)
+
+	//获取 event.header.EventType 事件对应的私有事件头的长度
 	headerSize := parser.format.eventTypeHeaderLengths[event.header.EventType-1]
 	var tableIdSize int
 	if headerSize == 6 {
@@ -44,11 +90,12 @@ func (parser *eventParser) parseRowsEvent(buf *bytes.Buffer) (event *RowsEvent, 
 
 	// event = &RowsEvent{}
 	// if parser.format.EventTypeHeaderLengths[h.EventType-1] == 6 {
-	// 	event.tableIDSize = 4
+	// 		event.tableIDSize = 4
 	// } else {
-	// 	event.tableIDSize = 6
+	// 		event.tableIDSize = 6
 	// }
 
+	//TableId: 4B or 6B, 如果 TableId 是 0x00ffffff，则它是一个伪事件，它应该设置语句结束标志，声明可以释放所有表映射。
 	event.tableId, err = readFixedLengthInteger(buf, tableIdSize)
 
 	// log.Println("======parser.tableMap:", parser.tableMap)
@@ -63,34 +110,45 @@ func (parser *eventParser) parseRowsEvent(buf *bytes.Buffer) (event *RowsEvent, 
 	// 	}
 	// }
 
+
+	//Flags: 2B, 0x0001 - end of statement, 0x0002 - no foreign key checks, 0x0004 - no unique key checks, 0x0008 - row has a columns
 	err = binary.Read(buf, binary.LittleEndian, &event.flags)
+
 	switch event.header.EventType {
-	case UPDATE_ROWS_EVENTv2,WRITE_ROWS_EVENTv2,DELETE_ROWS_EVENTv2:
+	case UPDATE_ROWS_EVENTv2, WRITE_ROWS_EVENTv2, DELETE_ROWS_EVENTv2: // written from MySQL 5.6.x, added the extra-data fields
 		//err = binary.Read(buf, binary.LittleEndian, &event.flags)
-		extraDataLength,_:=readFixedLengthInteger(buf,2)
+		//extra_data_len: 2B, length of extra_data (has to be ≥ 2)
+		extraDataLength,_:=readFixedLengthInteger(buf, 2)
+		//extra_data: ignore
 		buf.Next(int(extraDataLength/8))
 		break
 	}
 
+	//列数目。
 	columnCount, _, err = readLengthEncodedInt(buf)
-
+	// columns-present-bitmap1, length: (num of columns+7)/8
 	event.columnsPresentBitmap1 = Bitfield(buf.Next(int((columnCount + 7) / 8)))
 	switch event.header.EventType {
 	case UPDATE_ROWS_EVENTv1, UPDATE_ROWS_EVENTv2:
+		//columns-present-bitmap2, length: (num of columns+7)/8
 		event.columnsPresentBitmap2 = Bitfield(buf.Next(int((columnCount + 7) / 8)))
 	}
 	
 	event.tableMap = parser.tableMap[event.tableId]
 	for buf.Len() > 0 {
+
+		// 从 buf 中解析出一个 RowEvent，转成 map[field_name][field_value] 格式
 		var row map[string]driver.Value
 		row, err = parser.parseEventRow(buf, event.tableMap, parser.tableSchemaMap[event.tableId])
 		if err != nil {
 			log.Println("event row parser err:",err)
 			return
 		}
+
+		// 保存
 		event.rows = append(event.rows, row)
 
-		// get primary, 判断设置的COLUMN_KEY约束类型，来获取主键字段
+		// 判断设置的 COLUMN_KEY 约束类型，来获取主键字段
 		for _, w := range parser.tableSchemaMap[event.tableId]{
 			// b, err := json.Marshal(w)
 			// if err != nil {
@@ -103,27 +161,30 @@ func (parser *eventParser) parseRowsEvent(buf *bytes.Buffer) (event *RowsEvent, 
 			}
 		}
 	}
-
 	return
 }
 
 // 字段=值，值类型转换
 func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEvent, tableSchemaMap []*column_schema_type) (row map[string]driver.Value, e error) {
 	columnsCount := len(tableMap.columnTypes)
-	row = make(map[string]driver.Value)
 	bitfieldSize := (columnsCount + 7) / 8
+
 	nullBitMap := Bitfield(buf.Next(bitfieldSize))
+	
+
+	row = make(map[string]driver.Value)
 	for i := 0; i < columnsCount; i++ {
 		column_name := tableSchemaMap[i].COLUMN_NAME
 		if nullBitMap.isSet(uint(i)) {
 			row[column_name] = nil
 			continue
 		}
+
 		switch tableMap.columnMetaData[i].column_type {
-		case FIELD_TYPE_NULL:
+		case FIELD_TYPE_NULL: //null
 			row[column_name] = nil
 
-		case FIELD_TYPE_TINY:
+		case FIELD_TYPE_TINY: //bool or uint8 or int8
 			var b byte
 			b, e = buf.ReadByte()
 			if tableSchemaMap[i].is_bool == true{
@@ -145,7 +206,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				}
 			}
 
-		case FIELD_TYPE_SHORT:
+		case FIELD_TYPE_SHORT: //uint16 or int16
 			if tableSchemaMap[i].unsigned{
 				var short uint16
 				e = binary.Read(buf, binary.LittleEndian, &short)
@@ -156,7 +217,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				row[column_name] = short
 			}
 
-		case FIELD_TYPE_YEAR:
+		case FIELD_TYPE_YEAR: //1900+x
 			var b byte
 			b, e = buf.ReadByte()
 			if e == nil && b != 0 {
@@ -164,7 +225,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				row[column_name] = strconv.Itoa(int(b) + 1900)
 			}
 
-		case FIELD_TYPE_INT24:
+		case FIELD_TYPE_INT24: //uint32 or int32
 			if tableSchemaMap[i].unsigned {
 				var bint uint64
 				bint, e = readFixedLengthInteger(buf, 3)
@@ -177,8 +238,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				row[column_name] = int32(a + (b << 8) + (c << 16))
 			}
 
-
-		case FIELD_TYPE_LONG:
+		case FIELD_TYPE_LONG: //uint32 or int32
 			if tableSchemaMap[i].unsigned {
 				var long uint32
 				e = binary.Read(buf, binary.LittleEndian, &long)
@@ -189,7 +249,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				row[column_name] = long
 			}
 
-		case FIELD_TYPE_LONGLONG:
+		case FIELD_TYPE_LONGLONG: //uint64 or int64
 			if tableSchemaMap[i].unsigned{
 				var longlong uint64
 				e = binary.Read(buf, binary.LittleEndian, &longlong)
@@ -200,20 +260,20 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				row[column_name] = longlong
 			}
 
-		case FIELD_TYPE_FLOAT:
+		case FIELD_TYPE_FLOAT: //float32
 			var float float32
 			e = binary.Read(buf, binary.LittleEndian, &float)
 			row[column_name] = float
 
-		case FIELD_TYPE_DOUBLE:
+		case FIELD_TYPE_DOUBLE: //float64
 			var double float64
 			e = binary.Read(buf, binary.LittleEndian, &double)
 			row[column_name] = double
 
-		case FIELD_TYPE_DECIMAL:
+		case FIELD_TYPE_DECIMAL: //...
 			return nil, fmt.Errorf("parseEventRow unimplemented for field type %s", fieldTypeName(tableMap.columnTypes[i]))
 
-		case FIELD_TYPE_NEWDECIMAL:
+		case FIELD_TYPE_NEWDECIMAL: //...
 			digits_per_integer := 9
 			compressed_bytes := [10]int{0, 1, 1, 2, 2, 3, 3, 4, 4, 4}
 			integral := (tableMap.columnMetaData[i].precision - tableMap.columnMetaData[i].decimals)
@@ -274,9 +334,10 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 			}
 			row[column_name] = res
 
-		case FIELD_TYPE_VARCHAR:
+		case FIELD_TYPE_VARCHAR: //string
 			max_length := tableMap.columnMetaData[i].max_length
 			var length int
+			//对于varchar类型，如果最大长度超过255，会用两个字节保存长度
 			if max_length > 255 {
 				var short uint16
 				e = binary.Read(buf, binary.LittleEndian, &short)
@@ -286,6 +347,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				b, e = buf.ReadByte()
 				length = int(b)
 			}
+			//数据不足
 			if buf.Len() < length {
 				e = io.EOF
 			}
@@ -299,6 +361,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 			row[column_name] = string(buf.Next(length))
 
 		case FIELD_TYPE_ENUM:
+			//对于enum和set类型，size保存了当前列的数值用几个字节来存储
 			size := tableMap.columnMetaData[i].size
 			var index int
 			if size == 1 {
@@ -308,9 +371,11 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 			} else {
 				index = int(bytesToUint16(buf.Next(int(size))))
 			}
-			row[column_name] = tableSchemaMap[i].enum_values[index-1]
+			//反查enum_values[]表获取枚举对应的真实值
+			row[column_name] = tableSchemaMap[i].enum_values[index-1] 
 
 		case FIELD_TYPE_SET:
+			//对于enum和set类型，size保存了当前列的数值用几个字节来存储
 			size := tableMap.columnMetaData[i].size
 			var index int
 			switch size {
@@ -331,48 +396,68 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				index = 0
 			}
 			result := make(map[string]int, 0)
+			// mathPower(2,i) 相当于将 0x01 左移 n 位得到的新的数值
 			var mathPower = func (x int, n int) int {
-					ans := 1
-					for n != 0 {
-						ans *= x
-						n--
-					}
-					return ans
-					}
-
+								ans := 1
+								for n != 0 {
+									ans *= x  //ans *= x 相当于x进制表示的左移1位
+									n--       //n表示最多左移动几次
+								}
+								return ans
+							}
+			// 相当于 bitmap & mask，获取有效位 i 对应的值 set_values[i]
 			for i, val := range tableSchemaMap[i].set_values {
-				s := index & mathPower(2,i)
+				s := index & mathPower(2,i) 
 				if s > 0 {
 					result[val] = 1
 				}
 			}
+
 			f := make([]string, 0)
 			for key, _ := range result {
 				f = append(f, key)
 			}
 			row[column_name] = f
 
-		case FIELD_TYPE_BLOB,FIELD_TYPE_TINY_BLOB, FIELD_TYPE_MEDIUM_BLOB,
-			FIELD_TYPE_LONG_BLOB, FIELD_TYPE_VAR_STRING:
+		case FIELD_TYPE_BLOB,
+			 FIELD_TYPE_TINY_BLOB, 
+			 FIELD_TYPE_MEDIUM_BLOB,
+			 FIELD_TYPE_LONG_BLOB, 
+			 FIELD_TYPE_VAR_STRING:
 			var length uint64
 			length, e = readFixedLengthInteger(buf, int(tableMap.columnMetaData[i].length_size))
 			row[column_name] = string(buf.Next(int(length)))
 			break
 
 		case FIELD_TYPE_BIT:
+
 			var resp string = ""
+
+			//对于bit类型，bytes保存了当前bit类型需占用的字节数。
 			for k := 0; k < tableMap.columnMetaData[i].bytes; k++ {
 				//var current_byte = ""
 				var current_byte []string
 				var b byte
 				var end byte
-				b, e = buf.ReadByte()
 				var data int
+
+				//每次循环读取一个字节
+				b, e = buf.ReadByte()
 				data = int(b)
+
+
+				//注意，二进制序列是从高位到低位逐个字节读取的，bitmap总共占n个字节，
+				//实际上 total bits = (n-1)*bytes + some residual bits，
+				//这些残余的bits都位于高位字节，所以对于最高位的字节，需要判断它是否
+				//只包含了部分有效的 residual bits。
+
+				// 第一个高位字节
 				if k == 0 {
+					// 如果本字段只占一个字节，那么只需遍历 bits 个位
 					if tableMap.columnMetaData[i].bytes == 1 {
 						end = tableMap.columnMetaData[i].bits
 					} else {
+						//模8后的结果 end 即本字节内的有效位数，若模8值为0，则整个字节都有效。
 						end = tableMap.columnMetaData[i].bits % 8
 						if end == 0 {
 							end = 8
@@ -381,6 +466,9 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 				} else {
 					end = 8
 				}
+
+				//将字节表示成二进制的字符串表示，注意遍历顺序是从低位到高位，所以通过append添加得到
+				//字符串为: byte(00001111) => "11110000"。
 				var bit uint
 				for bit = 0; bit < uint(end); bit++ {
 					tmp := 1 << bit
@@ -390,16 +478,18 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 						current_byte = append(current_byte, "0")
 					}
 				}
+
+				// 把字节的字符串表示逆序修正后，追加到resp中。
 				for k := len(current_byte); k > 0; k-- {
 					resp += current_byte[k-1]
 				}
 			}
-			bitInt, _ := strconv.ParseInt(resp, 2, 10)
+
+			bitInt, _ := strconv.ParseInt(resp, 2, 10)  // 以二进制方式将字符串resp解码成10位的整数
 			row[column_name] = bitInt
 			break
 
-		case
-			FIELD_TYPE_GEOMETRY:
+		case FIELD_TYPE_GEOMETRY:
 			return nil, fmt.Errorf("parseEventRow unimplemented for field type %s", fieldTypeName(tableMap.columnTypes[i]))
 
 		case FIELD_TYPE_DATE, FIELD_TYPE_NEWDATE:
@@ -409,9 +499,9 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 			if timeInt == 0 {
 				row[column_name] = nil
 			} else {
-				year := (timeInt & (((1 << 15) - 1) << 9)) >> 9
+				year  := (timeInt & (((1 << 15) - 1) << 9)) >> 9
 				month := (timeInt & (((1 << 4) - 1) << 5)) >> 5
-				day := (timeInt & ((1 << 5) - 1))
+				day   := (timeInt & ((1 << 5) - 1))
 				var monthStr, dayStr string
 				if month >= 10 {
 					monthStr = strconv.Itoa(month)
@@ -504,12 +594,11 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 
 			second := int(t % 100)
 			minute := int((t % 10000) / 100)
-			hour := int((t % 1000000) / 10000)
-
-			d := int(t / 1000000)
-			day := d % 100
-			month := time.Month((d % 10000) / 100)
-			year := d / 10000
+			hour   := int((t % 1000000) / 10000)
+			d      := int(t / 1000000)
+			day    := d % 100
+			month  := time.Month((d % 10000) / 100)
+			year   := d / 10000
 
 			row[column_name] = time.Date(year, month, day, hour, minute, second, 0, time.UTC).Format(TIME_FORMAT)
 			break
@@ -530,11 +619,13 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 }
 
 /*
-Read a part of binary data and extract a number
-binary: the data
-start: From which bit (1 to X)
-size: How many bits should be read
-data_length: data size
+Read a part of binary data and extract a number.
+
+Params:
+	binary: the data
+	start: From which bit (1 to X)
+	size: How many bits should be read
+	data_length: data size
 */
 func read_binary_slice(binary uint64, start uint64, size uint64, data_length uint64) uint64 {
 	binary = binary >> (data_length - (start + size))
@@ -546,12 +637,12 @@ func read_binary_slice(binary uint64, start uint64, size uint64, data_length uin
 /*
 DATETIME
 
-1 bit  sign           (1= non-negative, 0= negative)
+1  bit  sign           (1= non-negative, 0= negative)
 17 bits year*13+month  (year 0-9999, month 0-12)
-5 bits day            (0-31)
-5 bits hour           (0-23)
-6 bits minute         (0-59)
-6 bits second         (0-59)
+5  bits day            (0-31)
+5  bits hour           (0-23)
+6  bits minute         (0-59)
+6  bits second         (0-59)
 ---------------------------
 40 bits = 5 bytes
 */
@@ -571,14 +662,14 @@ func read_datetime2(buf *bytes.Buffer)(data string,err error) {
 	log.Println("read_datetime2 b:",b)
 	log.Println("a << 8:",uint(a) << 8)
 	*/
-	dataInt := uint64(b) + uint64((uint(a) << 8))
-	year_month := read_binary_slice(dataInt, 1, 17, 40)
-	year := int(year_month / 13)
-	month := time.Month(year_month % 13)
-	days := read_binary_slice(dataInt, 18, 5, 40)
-	hours:= read_binary_slice(dataInt, 23, 5, 40)
-	minute :=read_binary_slice(dataInt, 28, 6, 40)
-	second :=read_binary_slice(dataInt, 34, 6, 40)
+	dataInt 	:= uint64(b) + uint64((uint(a) << 8))
+	year_month 	:= read_binary_slice(dataInt, 1, 17, 40)
+	year 		:= int(year_month / 13)
+	month 		:= time.Month(year_month % 13)
+	days 		:= read_binary_slice(dataInt, 18, 5, 40)
+	hours		:= read_binary_slice(dataInt, 23, 5, 40)
+	minute 		:=read_binary_slice(dataInt, 28, 6, 40)
+	second 		:=read_binary_slice(dataInt, 34, 6, 40)
 	data = time.Date(year, month, int(days), int(hours), int(minute), int(second), 0, time.UTC).Format(TIME_FORMAT)
 	return
 }

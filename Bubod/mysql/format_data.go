@@ -7,8 +7,26 @@ import (
 )
 
 /*
-最终输出格式
-{"binlog":"mysql-bin.000004:786","db":"test","table":"test1","query":"","event_type":"update","before":{"id":2,"num":1,"strs":"wddd","times":"-0001-11-30 00:00:00"},"after":{"id":2,"num":1,"strs":"wddd","times":"2018-09-14 00:00:00"}}
+最终输出格式:
+{
+	"binlog": "mysql-bin.000004:786",
+	"db": "test",
+	"table": "test1",
+	"query": "",
+	"event_type": "update",
+	"before": {
+		"id": 2,
+		"num": 1,
+		"strs": "wddd",
+		"times": "-0001-11-30 00:00:00"
+	},
+	"after": {
+		"id": 2,
+		"num": 1,
+		"strs": "wddd",
+		"times": "2018-09-14 00:00:00"
+	}
+}
 
 */
 type FormatDataJsonStruct struct {

@@ -9,15 +9,15 @@ type column_schema_type struct {
 	COLUMN_NAME        string	// 字段名
 	COLLATION_NAME     string	// 排序规则，如：utf8_general_ci
 	CHARACTER_SET_NAME string	// 编码 如：utf8
-	COLUMN_COMMENT     string
+	COLUMN_COMMENT     string   // 注释
 	COLUMN_KEY         string	// 约束类型，PRI主键约束、UNI唯一约束、MUL可以重复、没有主键则为空 "“（没有用户手动设置的主键，mysql自身优化创建的主键无法获取）
 	COLUMN_TYPE        string	// 字段类型 如：int(10)、varchar(16)、int(11) unsigned、float(9,2)
 	NUMERIC_SCALE      string   // 浮点数精确多少数
-	enum_values        []string
-	set_values         []string
-	is_bool            bool
+	enum_values        []string // 枚举值，0 - enum_values[0]、1 - enum_values[1]
+	set_values         []string // 集合值，
+	is_bool            bool     // 是否布尔类型
 	is_primary         bool		// 是否索引，COLUMN_KEY非空时候此值为true
-	unsigned 		   bool
+	unsigned 		   bool     // 是否无符号整数
 	auto_increment     bool		// 是否自增列
 }
 
@@ -28,18 +28,20 @@ type MysqlConnection interface {
 	Prepare(query string) (driver.Stmt, error)
 	Exec(query string,args []driver.Value)  (driver.Result, error)
 }
+
 // 事件内容
 type EventReslut struct {
-	Header         EventHeader
-	Rows           []map[string]driver.Value // 变更数据
-	Query          string	// sql
-	SchemaName     string	// 库
-	TableName      string	// 表
-	BinlogFileName string
-	BinlogPosition uint32
-	Primary		   string	// 主键字段
-	// ColumnSchemaType	  *column_schema_type // 表字段属性
+	Header         EventHeader                  // 通用事件头
+	Rows           []map[string]driver.Value 	// 变更数据
+	Query          string						// sql
+	SchemaName     string						// 库
+	TableName      string						// 表
+	BinlogFileName string   					// binlog文件名
+	BinlogPosition uint32   					// binlog文件偏移
+	Primary		   string						// 主键字段
+	// ColumnSchemaType	  *column_schema_type 	// 表字段属性
 }
+
 // 事件回调
 type callback func(data *EventReslut)
 

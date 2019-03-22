@@ -25,10 +25,10 @@ func init() {
 	dbgLog = log.New(os.Stdout, "[MySQL] ", log.LstdFlags)
 
 	dsnPattern = regexp.MustCompile(
-		`^(?:(?P<user>.*?)(?::(?P<passwd>.*))?@)?` + // [user[:password]@]
-			`(?:(?P<net>[^\(]*)(?:\((?P<addr>[^\)]*)\))?)?` + // [net[(addr)]]
-			`\/(?P<dbname>.*?)` + // /dbname
-			`(?:\?(?P<params>[^\?]*))?$`) // [?param1=value1&paramN=valueN]
+		`^(?:(?P<user>.*?)(?::(?P<passwd>.*))?@)?` + 		// [user[:password]@]
+		`(?:(?P<net>[^\(]*)(?:\((?P<addr>[^\)]*)\))?)?` + 	// [net[(addr)]]
+		`\/(?P<dbname>.*?)` + 								// /dbname
+		`(?:\?(?P<params>[^\?]*))?$`) 						// [?param1=value1&paramN=valueN]
 }
 
 // Data Source Name Parser

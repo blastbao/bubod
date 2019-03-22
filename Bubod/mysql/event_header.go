@@ -7,14 +7,65 @@ import (
 	"encoding/binary"
 	"fmt"
 )
-// 事件头信息处理
+
+
+
+
+// binlog 实际上由一个个不同类型的 binlog event 组成，每个 binlog event 还包含了 EventHeader 和 EventData 部分(可选)。
+//【注意：每个event最后还有4bytes的校验位，官方文档并没有提到这个地方，不然分析 event 物理格式时候会发现 event 长度对不上号】
+
+// 常见的一个binlog物理文件有如下组成部分：
+// 1、4字节的magic number作为binlog文件的开头
+// 2、N个不同类型的binlog event
+// 3、rotate event 作为binlog文件的结尾（正在使用的binlog里面是没有rotate event的）
+
+// 下表就是的binlog event的一般格式：
+
+// +=====================================+
+// | event  | timestamp         0 : 4    |
+// | header +----------------------------+
+// |        | type_code         4 : 1    | = FORMAT_DESCRIPTION_EVENT = 15（binlog v4）
+// |        +----------------------------+
+// |        | server_id         5 : 4    |
+// |        +----------------------------+
+// |        | event_length      9 : 4    | >= 91
+// |        +----------------------------+
+// |        | next_position    13 : 4    |
+// |        +----------------------------+
+// |        | flags            17 : 2    |
+// +=====================================+
+// | event  | binlog_version   19 : 2    | = 4
+// | data   +----------------------------+
+// |        | server_version   21 : 50   |
+// |        +----------------------------+
+// |        | create_timestamp 71 : 4    |
+// |        +----------------------------+
+// |        | header_length    75 : 1    |
+// |        +----------------------------+
+// |        | post-header      76 : n    | = array of n bytes, one byte per event type that the server knows about
+// |        | lengths for all            |   
+// |        | event types                |
+// +=====================================+
+
+// 此外，还有一个索引文件记录当前有哪些binlog文件，及当前正在使用的binlog文件。（文件名类似：mysql-bin.index）
+
+// 通用事件头(common-header)结构体 EventHeader ，固定为19个字节。
+//
+// 属性			字节数	含义
+// timestamp	4		包含了该事件的开始执行时间
+// eventType	1		事件类型: 是最重要的一个参数，不同的事件类型对应不同的 EventData 数据结构布局
+// serverId		4		标识产生该事件的 MySQL 服务器的 server-id 
+// eventLength	4		该事件的长度: EventHeader + EventData + CheckSum
+// nextPosition	4		下一个事件在binlog文件中的位置
+// flags		2		标识产生该事件的 MySQL 服务器的 server-id
+
 type EventHeader struct {
-	Timestamp uint32	// 事件时间
-	EventType EventType	// 事件类型
-	ServerId  uint32	// 实例id
-	EventSize uint32	// 事件log长度
-	LogPos    uint32	// log行位点
-	Flags     eventFlag
+	Timestamp uint32	
+	EventType EventType	
+	ServerId  uint32	
+	EventSize uint32	
+	LogPos    uint32	
+	Flags     eventFlag 
 }
 
 func (header *EventHeader) Read(data []byte) error {
