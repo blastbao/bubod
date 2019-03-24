@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 )
 
-
 // 简介:
 
 // FORMAT_DESCRIPTION_EVENT 是最基础的 Event ，它是binlog文件中的第一个事件，而且，该事件只会在binlog中出现一次。

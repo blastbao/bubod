@@ -257,7 +257,7 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 	}
 
 	// 注意，tableNameMap 保存了 database.tablename 和 tableId 的映射关系， 
-	// 而 tableSchemaMap 保存了 tableId 和 database.tablename 对应的 column_schema_type 的映射关系：
+	// 而 tableSchemaMap 保存了 tableId 和 database.tablename 对应的 column_schema_type[] 的映射关系：
 	// 		parser.tableNameMap[database+"."+tablename] = tableId
 	// 		parser.tableSchemaMap[tableId] = append(parser.tableSchemaMap[tableId], &column_schema_type{...})
 

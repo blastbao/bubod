@@ -618,6 +618,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 		default:
 			return nil, fmt.Errorf("Unknown FieldType %d", tableMap.columnTypes[i])
 		}
+		
 		if e != nil {
 			log.Println("lastFiled err:",tableMap.columnMetaData[i].column_type,e)
 			return nil, e
