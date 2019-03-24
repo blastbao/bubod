@@ -197,7 +197,7 @@ func (parser *eventParser) parseTableMapEvent(buf *bytes.Buffer) (event *TableMa
 	event.columnTypes = make([]FieldType, columnCount)
 	//列元数据数组。
 	event.columnMetaData = make([]*ColumnType, columnCount)
-	//读取 columnCount 个字节，每个字节 b 代表列的类型 Protocol::ColumnType
+	//读取 columnCount 个字节，每个字节 b 代表列的类型 Protocol::ColumnType。
 	columnData := buf.Next(int(columnCount))
 	for i, b := range columnData {
 		event.columnMetaData[i] = &ColumnType{column_type: FieldType(b)}

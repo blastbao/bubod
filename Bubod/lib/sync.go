@@ -8,17 +8,11 @@ import(
 	"time"
 )
 
-/**
-  提供每秒同步一次的服务
-*/
+// 每秒同步一次 file.pos
 func (dumpConfig *DumpConfig) InstantSync() {
-	
-	// 持续尝试写入
 	for {
-		// 判断是否有变更(可忽略)
-		newPos := fmt.Sprintf("%s:%d" ,dumpConfig.BinlogDumpFileName, dumpConfig.BinlogDumpPosition)
+		newPos := fmt.Sprintf("%s:%d", dumpConfig.BinlogDumpFileName, dumpConfig.BinlogDumpPosition)
 		if newPos != dumpConfig.SyncPos {
-			// 保存同步
 			dumpConfig.SyncBinlogFilenamePos(newPos)
 		}
 		log.Println("=============:",newPos)
@@ -26,21 +20,14 @@ func (dumpConfig *DumpConfig) InstantSync() {
 	}
 }
 
-/*
-  保存当前pos信息
-	1、将当前同步位点信息同步到 file/zookeeper
-	2、同步到zookeeper 是作为高可用环境下服务接力。考虑到zookeeper读写性能差。这里可使用其他公共存储组件(如redis)
-	3、fileNamePos  file_name:position
-*/
+// 保存当前 file.pos 信息到本地文件+zk
 func (dumpConfig *DumpConfig) SyncBinlogFilenamePos(fileNamePos string) error {
-
+	//检查字符串合法性
 	if CheckBinlogFilePos(fileNamePos) == false {
 		return fmt.Errorf("[error] SyncBinlogFilenamePos Invalid fileNamePos error %s", fileNamePos)
 	}
-
-	// bubod_dump_pos := config.GetConfigVal("Bubod","bubod_dump_pos")
+	//打开本地文件并写入
 	bubod_dump_pos := dumpConfig.Conf["Bubod"]["bubod_dump_pos"]
-
 	f, err := os.OpenFile(bubod_dump_pos, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0777) //打开文件
 	if err !=nil {
 		log.Println("[error] Write bubod_dump_pos OpenFile error:", bubod_dump_pos, "; Error:",err)
@@ -53,8 +40,7 @@ func (dumpConfig *DumpConfig) SyncBinlogFilenamePos(fileNamePos string) error {
 		}
 	}	
 	defer f.Close()
-
-	// 同步到zk
+	//同步到zk
 	if (dumpConfig.Conf["Zookeeper"]["server"] != ""){
 		dumpConfig.ElectionManager.SetData(fileNamePos)
 	}

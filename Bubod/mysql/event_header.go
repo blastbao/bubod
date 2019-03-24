@@ -54,13 +54,13 @@ import (
 // 属性			字节数	含义
 // timestamp	4		包含了该事件的开始执行时间
 // eventType	1		事件类型: 是最重要的一个参数，不同的事件类型对应不同的 EventData 数据结构布局
-// serverId		4		标识产生该事件的 MySQL 服务器的 server-id 
+// serverId		4		服务器标识，标识产生该事件的 MySQL 服务器的
 // eventLength	4		该事件的长度: EventHeader + EventData + CheckSum
 // nextPosition	4		下一个事件在binlog文件中的位置
 // flags		2		标识产生该事件的 MySQL 服务器的 server-id
 
 type EventHeader struct {
-	Timestamp uint32	
+	Timestamp uint32	   
 	EventType EventType	
 	ServerId  uint32	
 	EventSize uint32	

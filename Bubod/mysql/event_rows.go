@@ -111,7 +111,11 @@ func (parser *eventParser) parseRowsEvent(buf *bytes.Buffer) (event *RowsEvent, 
 	// }
 
 
-	//Flags: 2B, 0x0001 - end of statement, 0x0002 - no foreign key checks, 0x0004 - no unique key checks, 0x0008 - row has a columns
+	//Flags: 2B, 
+	// 0x0001 - end of statement, 
+	// 0x0002 - no foreign key checks, 
+	// 0x0004 - no unique key checks,
+	// 0x0008 - row has a columns
 	err = binary.Read(buf, binary.LittleEndian, &event.flags)
 
 	switch event.header.EventType {
@@ -134,6 +138,7 @@ func (parser *eventParser) parseRowsEvent(buf *bytes.Buffer) (event *RowsEvent, 
 		event.columnsPresentBitmap2 = Bitfield(buf.Next(int((columnCount + 7) / 8)))
 	}
 	
+
 	event.tableMap = parser.tableMap[event.tableId]
 	for buf.Len() > 0 {
 
@@ -169,18 +174,21 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 	columnsCount := len(tableMap.columnTypes)
 	bitfieldSize := (columnsCount + 7) / 8
 
-	nullBitMap := Bitfield(buf.Next(bitfieldSize))
+	nullBitMap := Bitfield(buf.Next(bitfieldSize))  		// 空字段位图，若第i字段值为null，就设置nullBitMap的第i位为1，以节省存储
 	
 
 	row = make(map[string]driver.Value)
-	for i := 0; i < columnsCount; i++ {
-		column_name := tableSchemaMap[i].COLUMN_NAME
-		if nullBitMap.isSet(uint(i)) {
+
+
+
+	for i := 0; i < columnsCount; i++ { 					// 逐列遍历字段 Meta 信息表，它是按照表字段名升序排序的。
+		column_name := tableSchemaMap[i].COLUMN_NAME      	// 字段名
+		if nullBitMap.isSet(uint(i)) {                      // 将空字段置为nil
 			row[column_name] = nil
 			continue
 		}
 
-		switch tableMap.columnMetaData[i].column_type {
+		switch tableMap.columnMetaData[i].column_type {     // 为啥是 tableMap.columnMetaData[i].column_type 而不是 tableSchemaMap[i].COLUMN_TYPE ? 
 		case FIELD_TYPE_NULL: //null
 			row[column_name] = nil
 
@@ -375,7 +383,7 @@ func (parser *eventParser) parseEventRow(buf *bytes.Buffer, tableMap *TableMapEv
 			row[column_name] = tableSchemaMap[i].enum_values[index-1] 
 
 		case FIELD_TYPE_SET:
-			//对于enum和set类型，size保存了当前列的数值用几个字节来存储
+			//对于enum和set类型，size保存了当前列的值用几个字节来存储
 			size := tableMap.columnMetaData[i].size
 			var index int
 			switch size {

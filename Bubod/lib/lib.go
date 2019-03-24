@@ -10,7 +10,7 @@ import (
 )
 
 
-// 从conf/本地文件data_file/zk 获取最新的filename+position
+// 从 conf/本地文件data_file/zk 获取最新的filename+position
 // return file_name:position
 func (dumpConfig *DumpConfig) GetLastPosition() string{
 
@@ -40,10 +40,10 @@ func (dumpConfig *DumpConfig) GetLastPosition() string{
 		}
 	}
 
-	// 从zookeeper获取位点信息，待实现。。。
-	if (config.GetConfigVal("Zookeeper","server") != ""){
-		zk_pos = dumpConfig.ElectionManager.GetData()
-	}
+	// // 从zookeeper获取位点信息，待实现。。。
+	// if (config.GetConfigVal("Zookeeper","server") != ""){
+	// 	zk_pos = dumpConfig.ElectionManager.GetData()
+	// }
 
 	// 使用最大位点
 	if config_pos != "" && CheckBinlogFilePos(config_pos) {

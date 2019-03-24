@@ -238,8 +238,6 @@ func (electionManager *ElectionManager) GetData() string{
 	return string(v[:])
 }
 
-
-
 func main() {
 	// zookeeper配置
 	zkConfig := &ZookeeperConfig{

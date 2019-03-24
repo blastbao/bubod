@@ -18,10 +18,11 @@ type mysqlConn struct {
 	sequence       uint8
 	affectedRows   uint64
 	insertId       uint64
-	lastCmdTime    time.Time
-	keepaliveTimer *time.Timer
+	lastCmdTime    time.Time        //上个命令的执行时间戳
+	keepaliveTimer *time.Timer 		//
 }
 
+// Mysql连接参数
 type config struct {
 	user   string
 	passwd string
@@ -31,6 +32,7 @@ type config struct {
 	params map[string]string
 }
 
+//
 type serverSettings struct {
 	protocol     byte
 	version      string
@@ -38,11 +40,14 @@ type serverSettings struct {
 	charset      uint8
 	scrambleBuff []byte
 	threadID     uint32
-	keepalive    int64
+	keepalive    int64               //保活时间间隔， 秒
 }
 
 // Handles parameters set in DSN
 func (mc *mysqlConn) handleParams() (e error) {
+
+
+	// 设置DB参数
 	for param, val := range mc.cfg.params {
 		switch param {
 		// Charset
@@ -75,6 +80,7 @@ func (mc *mysqlConn) handleParams() (e error) {
 
 	// KeepAlive
 	if val, param := mc.cfg.params["keepalive"]; param {
+		
 		mc.server.keepalive, e = strconv.ParseInt(val, 10, 64)
 		if e != nil {
 			return errors.New("Invalid keepalive time")
@@ -94,19 +100,23 @@ func (mc *mysqlConn) handleParams() (e error) {
 			}
 		}
 
+
 		if mc.server.keepalive > 0 {
 			mc.lastCmdTime = time.Now()
-
 			// Ping-Timer to avoid timeout
+			// 连接保活定时器，在 keepalive 秒之后会调用 fun()，fun()内部会for循环保活，定时 Ping() mysql 服务器。
 			mc.keepaliveTimer = time.AfterFunc(
-				time.Duration(mc.server.keepalive)*time.Second, func() {
+				time.Duration(mc.server.keepalive)*time.Second,
+				func() {
 					var diff time.Duration
 					for {
 						// Fires only if diff > keepalive. Makes it collision safe
-						for mc.netConn != nil && mc.lastCmdTime.Unix()+mc.server.keepalive > time.Now().Unix() {
+						// 如果连接有效、且尚未超时，则等待一会再循环检查，直到连接空闲时间超过 keepalive 秒。
+						for mc.netConn != nil && mc.lastCmdTime.Unix() + mc.server.keepalive > time.Now().Unix() {
 							diff = mc.lastCmdTime.Sub(time.Unix(time.Now().Unix()-mc.server.keepalive, 0))
 							time.Sleep(diff)
 						}
+						// 如果连接有效、且连接空闲时间超过 keepalive 秒，则调用 Ping() 来保活。
 						if mc.netConn != nil {
 							if e := mc.Ping(); e != nil {
 								break
@@ -126,7 +136,6 @@ func (mc *mysqlConn) Begin() (driver.Tx, error) {
 	if e != nil {
 		return nil, e
 	}
-
 	return &mysqlTx{mc}, e
 }
 
@@ -193,9 +202,9 @@ func (mc *mysqlConn) Exec(query string, args []driver.Value) (driver.Result, err
 	}
 
 	return &mysqlResult{
-			affectedRows: int64(mc.affectedRows),
-			insertId:     int64(mc.insertId)},
-		e
+				affectedRows: int64(mc.affectedRows),
+				insertId: int64(mc.insertId),
+			}, e
 }
 
 // Internal function to execute statements

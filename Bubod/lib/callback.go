@@ -13,9 +13,9 @@ func (dump *dump) Callback(data *mysql.EventReslut) {
 	if len(data.Rows) == 0 {
 		return
 	}
+	
 	// key := data.SchemaName + "-" + data.TableName
 	// fmt.Printf(key)
-
 	// log.Println("===Callback:")
 	// log.Println("===EventHeader:", data.Header)
 	// log.Println("===EventType:", mysql.EvenTypeName(data.Header.EventType))
@@ -25,14 +25,14 @@ func (dump *dump) Callback(data *mysql.EventReslut) {
 	// log.Println("===BinlogFileName:", data.BinlogFileName)
 	// log.Println("===BinlogPosition:", data.BinlogPosition)
 	// log.Println("===Rows:", data)
-	jsonDatas := mysql.FormatEventData(data)
 
+	jsonDatas := mysql.FormatEventData(data)
 	if dump.dumpConfig.Conf["Bubod"]["debug"] == "true" {
 		log.Println(jsonDatas)
 	}
-	
 	dump.dumpConfig.BinlogDumpFileName = data.BinlogFileName
 	dump.dumpConfig.BinlogDumpPosition = data.BinlogPosition
+
 	// go func(){ 
 		// 这里交给异步服务做
 		// sync pos
@@ -43,17 +43,17 @@ func (dump *dump) Callback(data *mysql.EventReslut) {
 		// }
 	// }()
 	
-	go func(){
-		// push mq
-		for _,v := range jsonDatas {
-			if dump.dumpConfig.MqClass != nil {
-				err_ := dump.dumpConfig.MqClass.Push(v)
-				if err_ != nil {
-					log.Println("[error] push error:", err_)
-				}
-			}
-		}
-	}()
+	// go func(){
+	// 	// push mq
+	// 	for _,v := range jsonDatas {
+	// 		if dump.dumpConfig.MqClass != nil {
+	// 			err_ := dump.dumpConfig.MqClass.Push(v)
+	// 			if err_ != nil {
+	// 				log.Println("[error] push error:", err_)
+	// 			}
+	// 		}
+	// 	}
+	// }()
 
 	return
 }

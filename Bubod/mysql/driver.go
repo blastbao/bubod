@@ -24,6 +24,8 @@ func (d *mysqlDriver) Open(dsn string) (driver.Conn, error) {
 	if e != nil {
 		return nil, e
 	}
+
+	// Wrap buffed IO
 	mc.bufReader = bufio.NewReader(mc.netConn)
 
 	// Reading Handshake Initialization Packet 

@@ -31,15 +31,15 @@ func init() {
 
 // 加载配置文件
 func LoadConf(conf_file string) map[string]map[string]string {
-	var per map[string]map[string]string
-	per = make(map[string]map[string]string)
+	per := make(map[string]map[string]string)
+	
 	f, _ := os.Open(conf_file)
-
     defer f.Close()
 
 	buf := bufio.NewReader(f)
 	stringKey := ""
 	for {
+		//逐行解析
 		l, err := buf.ReadString('\n')
 		line := strings.TrimSpace(l)
 		if err != nil {
@@ -52,18 +52,22 @@ func LoadConf(conf_file string) map[string]map[string]string {
 				break
 			}
 		}
+
 		switch {
 		case len(line) == 0:
+		//[xxx]: 配置组名称
 		case line[0] == '[' && line[len(line)-1] == ']':
 			stringKey = strings.TrimSpace(line[1 : len(line)-1])
 			per[stringKey] = make(map[string]string)
 		case line[0] == '#':
 		case line[0] == ';':
 		default:
+			//a=xxx: 配置项
 			i := strings.IndexAny(line, "=")
 			per[stringKey][strings.TrimSpace(line[0:i])] = strings.TrimSpace(line[i+1:])
 		}
 	}
+
 	MyConf = per
 	return MyConf
 }

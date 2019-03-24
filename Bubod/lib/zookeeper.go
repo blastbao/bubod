@@ -59,13 +59,11 @@ func ZkStart() {
 func create(conn *zk.Conn, path string, data []byte) {
     var flags int32 = zk.FlagEphemeral
     var acls = zk.WorldACL(zk.PermAll)
-
     _, err_create := conn.Create(path, data, flags, acls)
     if err_create != nil {
         fmt.Println(err_create)
         return
     }
-
 }
 
 func callback(event zk.Event) {

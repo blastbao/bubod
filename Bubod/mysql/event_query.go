@@ -9,6 +9,9 @@ import (
 	"encoding/binary"
 )
 
+// 执行更新语句时会生成 QUERY_EVENT，包括 create, insert, update, delete. 
+
+
 
 type QueryEvent struct {
 	header        EventHeader
@@ -28,9 +31,9 @@ func (parser *eventParser) parseQueryEvent(buf *bytes.Buffer) (event *QueryEvent
 	err = binary.Read(buf, binary.LittleEndian, &event.header)
 	err = binary.Read(buf, binary.LittleEndian, &event.slaveProxyId)
 	err = binary.Read(buf, binary.LittleEndian, &event.executionTime)
-	err = binary.Read(buf, binary.LittleEndian, &schemaLength)
+	err = binary.Read(buf, binary.LittleEndian, &schemaLength)     		//1B
 	err = binary.Read(buf, binary.LittleEndian, &event.errorCode)
-	err = binary.Read(buf, binary.LittleEndian, &statusVarsLength)
+	err = binary.Read(buf, binary.LittleEndian, &statusVarsLength)      //2B
 	event.statusVars = string(buf.Next(int(statusVarsLength)))
 	event.schema = string(buf.Next(int(schemaLength)))
 	_, err = buf.ReadByte()
